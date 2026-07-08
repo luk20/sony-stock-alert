@@ -1,0 +1,51 @@
+name: 소니 입고 감시
+
+on:
+  schedule:
+    # 5분마다 실행 (GitHub Actions 최소 간격). UTC 기준이지만 주기 실행이라 무관.
+    - cron: '*/5 * * * *'
+  # Actions 탭에서 수동 실행도 가능 (테스트용)
+  workflow_dispatch:
+    inputs:
+      send_test:
+        description: '테스트 메시지 보내기 (1 입력 시)'
+        required: false
+        default: ''
+
+concurrency:
+  group: stock-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 파이썬 준비
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 이전 재고 상태 복원
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: stock-state-${{ github.run_id }}
+          restore-keys: |
+            stock-state-
+
+      - name: 재고 확인 실행
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_TEST: ${{ github.event.inputs.send_test }}
+        run: python monitor.py
+
+      - name: 재고 상태 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: stock-state-${{ github.run_id }}

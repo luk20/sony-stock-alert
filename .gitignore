@@ -1,0 +1,7 @@
+# 토큰이 든 로컬 설정 파일은 절대 올리지 않음 (유출 방지)
+config.json
+
+# 자동 생성/임시 파일
+state.json
+__pycache__/
+*.pyc
