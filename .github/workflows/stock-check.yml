@@ -16,6 +16,10 @@ on:
         required: false
         default: ''
 
+# 보안: 이 워크플로는 저장소 쓰기 권한이 필요 없음 (최소 권한 원칙)
+permissions:
+  contents: read
+
 concurrency:
   group: stock-check
   cancel-in-progress: false

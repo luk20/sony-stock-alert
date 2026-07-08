@@ -1,0 +1,27 @@
+name: 저장소 유지 (60일 규칙 방지)
+
+on:
+  schedule:
+    # 매월 1일 12:00 KST (03:00 UTC) — 60일 무활동으로 예약 실행이 꺼지는 것을 방지
+    - cron: '0 3 1 * *'
+  workflow_dispatch:
+
+# 이 워크플로만 커밋 푸시 권한 필요 (최소 권한 원칙)
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 타임스탬프 갱신 커밋
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/keepalive.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive.txt
+          git commit -m "chore: 저장소 활동 유지 (자동)" || echo "변경 없음"
+          git push

@@ -16,9 +16,11 @@
   TELEGRAM_BOT_TOKEN  (필수)
   TELEGRAM_CHAT_ID    (필수)
   SEND_TEST=1         (선택) 연결 확인용 테스트 메시지 1건만 보내고 종료
-  SEND_PREVIEW=1      (선택) 실제 입고 알림과 같은 모양의 미리보기 1건만 보내고 종료
+  SEND_PREVIEW=값     (선택) 입고 알림 미리보기 1건만 보내고 종료
+                      값: 숫자(상품 순번, 1부터) 또는 상품명/타입 일부 문자열
 """
 
+import html
 import json
 import os
 import re
@@ -133,15 +135,15 @@ def fetch_fuji_status(p):
     url = p["page_url"]
     headers = {"User-Agent": BROWSER_UA, "Accept-Language": "ko-KR,ko;q=0.9"}
     req = urllib.request.Request(url, headers=headers)
-    html = url_read(req).decode("utf-8", errors="replace")
+    page_html = url_read(req).decode("utf-8", errors="replace")
 
     # 페이지 구조 검증: 차단/리다이렉트/개편 등으로 상품 페이지가 아니면
     # 조용히 "품절"로 오인하지 않도록 오류로 처리(다음 실행에서 재시도).
-    if "selected-product__item" not in html and "data-soldout" not in html:
+    if "selected-product__item" not in page_html and "data-soldout" not in page_html:
         raise RuntimeError("상품 페이지 구조를 찾지 못함 (차단 또는 페이지 변경 가능)")
 
     # 각 옵션(색상)은 selected-product__item 블록에 data-soldout="true/false" 로 표시됨
-    chunks = html.split('class="selected-product__item"')
+    chunks = page_html.split('class="selected-product__item"')
     available = False
     detail = []
     avail = []
@@ -152,8 +154,9 @@ def fetch_fuji_status(p):
         if not (sm and nmm):
             continue
         soldout = sm.group(1).strip().lower() == "true"
-        nm = nmm.group(1).strip()
-        price = prm.group(1).strip() if prm else ""
+        # 외부 페이지에서 가져온 문자열은 텔레그램 HTML 메시지에 들어가므로 이스케이프 (인젝션 방지)
+        nm = html.escape(nmm.group(1).strip())
+        price = html.escape(prm.group(1).strip()) if prm else ""
         if not soldout:
             available = True
             avail.append("{}{}".format(nm, " (" + price + ")" if price else ""))
@@ -161,7 +164,7 @@ def fetch_fuji_status(p):
 
     if not detail:
         # 파싱 실패 시 최후의 판단: data-soldout="false" 존재 여부
-        available = 'data-soldout="false"' in html
+        available = 'data-soldout="false"' in page_html
         detail.append("(옵션 파싱 실패, data-soldout=false 여부로 판단)")
 
     lines = []
