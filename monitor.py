@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-소니 입고 알리미 — 클라우드(GitHub Actions)용 감시 스크립트.
+입고 알리미 — 클라우드(GitHub Actions)용 감시 스크립트.
+
+지원 사이트:
+  - 소니코리아 공식스토어 (type: "sony", shopby API 방식)
+  - 후지필름코리아 공식스토어 (type: "fuji", HTML 파싱 방식)
 
 - 텔레그램 토큰/챗ID 는 환경변수(=GitHub Secrets)에서 읽습니다.
   절대 파일에 토큰을 저장하지 않아 공개 저장소에서도 안전합니다.
@@ -11,11 +15,13 @@
 환경변수:
   TELEGRAM_BOT_TOKEN  (필수)
   TELEGRAM_CHAT_ID    (필수)
-  SEND_TEST=1         (선택) 실제 감시 대신 테스트 메시지 1건만 보내고 종료
+  SEND_TEST=1         (선택) 연결 확인용 테스트 메시지 1건만 보내고 종료
+  SEND_PREVIEW=1      (선택) 실제 입고 알림과 같은 모양의 미리보기 1건만 보내고 종료
 """
 
 import json
 import os
+import re
 import sys
 import urllib.request
 import urllib.parse
@@ -25,8 +31,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PRODUCTS_PATH = os.path.join(BASE_DIR, "products.json")
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
 
+# 소니 스토어(shopby) 공개 API 정보 — bundle.js 에서 확인된 값
 SHOP_API = "https://shop-api.e-ncp.com"
 SHOP_CLIENT_ID = "jkEJfXWkjf3NDwFlgc37xQ=="
+
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 
 KST = timezone(timedelta(hours=9))
 
@@ -57,22 +66,33 @@ def save_json(path, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def http_get_json(url, headers=None, timeout=20):
-    req = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+def won(n):
+    try:
+        return "{:,}원".format(int(float(n)))
+    except Exception:
+        return str(n)
 
 
-def fetch_product_status(product_no):
+# ---------------------------------------------------------------------------
+# 사이트별 재고 조회
+# 각 함수는 다음 형태의 dict 를 반환:
+#   {"available": bool, "detail": "로그용 문자열", "alert_lines": ["알림 본문 줄", ...]}
+# ---------------------------------------------------------------------------
+
+def fetch_sony_status(p):
+    product_no = p["product_no"]
     url = "{}/products/{}/options".format(SHOP_API, product_no)
     headers = {
         "clientId": SHOP_CLIENT_ID,
         "version": "1.0",
         "platform": "PC",
         "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) sony-stock-alert",
+        "User-Agent": BROWSER_UA,
     }
-    data = http_get_json(url, headers=headers)
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+
     options = data.get("flatOptions") or data.get("multiLevelOptions") or []
     total_stock = 0
     available = False
@@ -86,13 +106,72 @@ def fetch_product_status(product_no):
         if (sale_type != "SOLDOUT") and (not forced_soldout):
             available = True
         detail.append("{}: {} (재고 {})".format(label, sale_type or "?", stock))
+
+    price = data.get("productSalePrice") or 0
     return {
         "available": available,
-        "stock": total_stock,
-        "price": data.get("productSalePrice") or 0,
         "detail": " / ".join(detail) if detail else "(옵션 정보 없음)",
+        "alert_lines": ["💰 가격: {}".format(won(price)), "📦 재고: {}".format(total_stock)],
     }
 
+
+def fetch_fuji_status(p):
+    url = p["page_url"]
+    headers = {"User-Agent": BROWSER_UA, "Accept-Language": "ko-KR,ko;q=0.9"}
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        html = resp.read().decode("utf-8", errors="replace")
+
+    # 각 옵션(색상)은 selected-product__item 블록에 data-soldout="true/false" 로 표시됨
+    chunks = html.split('class="selected-product__item"')
+    available = False
+    detail = []
+    avail = []
+    for chunk in chunks[1:]:
+        sm = re.search(r'data-soldout="([^"]*)"', chunk)
+        nmm = re.search(r'selected-product__name">([^<]*)<', chunk)
+        prm = re.search(r'selected-product__price">([^<]*)<', chunk)
+        if not (sm and nmm):
+            continue
+        soldout = sm.group(1).strip().lower() == "true"
+        nm = nmm.group(1).strip()
+        price = prm.group(1).strip() if prm else ""
+        if not soldout:
+            available = True
+            avail.append("{}{}".format(nm, " (" + price + ")" if price else ""))
+        detail.append("{}: {}".format(nm, "품절" if soldout else ("구매가능 " + price)))
+
+    if not detail:
+        # 파싱 실패 시 최후의 판단: data-soldout="false" 존재 여부
+        available = 'data-soldout="false"' in html
+        detail.append("(옵션 파싱 실패, data-soldout=false 여부로 판단)")
+
+    lines = []
+    if avail:
+        lines.append("🎨 구매 가능: " + ", ".join(avail))
+    return {"available": available, "detail": " / ".join(detail), "alert_lines": lines}
+
+
+def fetch_status(p):
+    ptype = (p.get("type") or "sony").lower()
+    if ptype == "fuji":
+        return fetch_fuji_status(p)
+    return fetch_sony_status(p)
+
+
+def default_url(p):
+    if p.get("page_url"):
+        return p["page_url"]
+    return "https://store.sony.co.kr/product-view/{}".format(p.get("product_no"))
+
+
+def product_key(p):
+    return str(p.get("product_no") or p.get("page_url") or p.get("name"))
+
+
+# ---------------------------------------------------------------------------
+# 텔레그램 / 메시지
+# ---------------------------------------------------------------------------
 
 def send_telegram(token, chat_id, text):
     url = "https://api.telegram.org/bot{}/sendMessage".format(token)
@@ -109,21 +188,17 @@ def send_telegram(token, chat_id, text):
     return result
 
 
-def won(n):
-    try:
-        return "{:,}원".format(int(float(n)))
-    except Exception:
-        return str(n)
-
-
-def build_alert_text(name, price, stock, url):
+def build_alert_text(name, alert_lines, url):
+    body = ("\n".join(alert_lines) + "\n") if alert_lines else ""
     return (
         "🚨🚨 <b>입고 알림!</b> 🚨🚨\n\n"
         "<b>{name}</b>\n지금 구매 가능합니다!\n\n"
-        "💰 가격: {price}\n📦 재고: {stock}\n"
+        "{body}"
         "🔗 <a href=\"{url}\">바로 구매하러 가기</a>"
-    ).format(name=name, price=won(price), stock=stock, url=url)
+    ).format(name=name, body=body, url=url)
 
+
+# ---------------------------------------------------------------------------
 
 def main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -135,7 +210,7 @@ def main():
     # 설정 확인용 테스트 메시지
     if os.environ.get("SEND_TEST", "").strip() == "1":
         send_telegram(token, chat_id,
-                      "✅ <b>테스트 성공</b>\n소니 입고 알리미가 정상적으로 연결되었습니다.")
+                      "✅ <b>테스트 성공</b>\n입고 알리미가 정상적으로 연결되었습니다.")
         log("테스트 메시지 전송 완료.")
         return
 
@@ -148,17 +223,15 @@ def main():
     # 미리보기: 실제 입고 알림과 동일한 모양을 1회만 보냄 (상태는 건드리지 않음)
     if os.environ.get("SEND_PREVIEW", "").strip() == "1":
         p = products[0]
-        pno = p.get("product_no")
-        name = p.get("name", str(pno))
-        page_url = p.get("page_url", "https://store.sony.co.kr/product-view/{}".format(pno))
+        name = p.get("name", product_key(p))
         try:
-            status = fetch_product_status(pno)
-            price, stock = status["price"], status["stock"]
+            status = fetch_status(p)
+            lines = status["alert_lines"] or ["(재고 상세 정보 없음)"]
         except Exception:
-            price, stock = 0, 0
+            lines = ["(재고 상세 정보 없음)"]
         preview = ("🔔 <b>[미리보기]</b> 실제 입고 시 아래처럼 알림이 옵니다.\n"
                    "(지금은 실제 입고가 아닙니다)\n"
-                   "──────────────\n" + build_alert_text(name, price, stock, page_url))
+                   "──────────────\n" + build_alert_text(name, lines, default_url(p)))
         send_telegram(token, chat_id, preview)
         log("미리보기 알림 전송 완료.")
         return
@@ -166,14 +239,12 @@ def main():
     state = load_json(STATE_PATH, {})
 
     for p in products:
-        pno = p.get("product_no")
-        name = p.get("name", str(pno))
-        page_url = p.get("page_url", "https://store.sony.co.kr/product-view/{}".format(pno))
-        key = str(pno)
+        name = p.get("name", product_key(p))
+        key = product_key(p)
         was_available = bool(state.get(key, {}).get("available", False))
 
         try:
-            status = fetch_product_status(pno)
+            status = fetch_status(p)
         except Exception as e:
             log("[{}] 조회 오류: {}".format(name, e))
             continue
@@ -184,7 +255,7 @@ def main():
 
         # 품절 -> 입고로 바뀌는 순간에만 알림
         if is_available and not was_available:
-            text = build_alert_text(name, status["price"], status["stock"], page_url)
+            text = build_alert_text(name, status["alert_lines"], default_url(p))
             try:
                 send_telegram(token, chat_id, text)
                 log("[{}] 📨 입고 알림 전송 완료".format(name))

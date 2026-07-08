@@ -2,8 +2,14 @@
   "products": [
     {
       "name": "소니 RX100 VII (DSC-RX100M7)",
+      "type": "sony",
       "product_no": 102263765,
       "page_url": "https://store.sony.co.kr/product-view/102263765"
+    },
+    {
+      "name": "후지필름 X100VI",
+      "type": "fuji",
+      "page_url": "https://www.fujifilm-korea.co.kr/products/id/1330"
     }
   ]
 }
