@@ -116,6 +116,15 @@ def won(n):
         return str(n)
 
 
+def build_alert_text(name, price, stock, url):
+    return (
+        "🚨🚨 <b>입고 알림!</b> 🚨🚨\n\n"
+        "<b>{name}</b>\n지금 구매 가능합니다!\n\n"
+        "💰 가격: {price}\n📦 재고: {stock}\n"
+        "🔗 <a href=\"{url}\">바로 구매하러 가기</a>"
+    ).format(name=name, price=won(price), stock=stock, url=url)
+
+
 def main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
@@ -135,6 +144,24 @@ def main():
     if not products:
         log("products.json 에 감시할 상품이 없습니다.")
         sys.exit(1)
+
+    # 미리보기: 실제 입고 알림과 동일한 모양을 1회만 보냄 (상태는 건드리지 않음)
+    if os.environ.get("SEND_PREVIEW", "").strip() == "1":
+        p = products[0]
+        pno = p.get("product_no")
+        name = p.get("name", str(pno))
+        page_url = p.get("page_url", "https://store.sony.co.kr/product-view/{}".format(pno))
+        try:
+            status = fetch_product_status(pno)
+            price, stock = status["price"], status["stock"]
+        except Exception:
+            price, stock = 0, 0
+        preview = ("🔔 <b>[미리보기]</b> 실제 입고 시 아래처럼 알림이 옵니다.\n"
+                   "(지금은 실제 입고가 아닙니다)\n"
+                   "──────────────\n" + build_alert_text(name, price, stock, page_url))
+        send_telegram(token, chat_id, preview)
+        log("미리보기 알림 전송 완료.")
+        return
 
     state = load_json(STATE_PATH, {})
 
@@ -157,13 +184,7 @@ def main():
 
         # 품절 -> 입고로 바뀌는 순간에만 알림
         if is_available and not was_available:
-            text = (
-                "🚨🚨 <b>입고 알림!</b> 🚨🚨\n\n"
-                "<b>{name}</b>\n지금 구매 가능합니다!\n\n"
-                "💰 가격: {price}\n📦 재고: {stock}\n"
-                "🔗 <a href=\"{url}\">바로 구매하러 가기</a>"
-            ).format(name=name, price=won(status["price"]),
-                     stock=status["stock"], url=page_url)
+            text = build_alert_text(name, status["price"], status["stock"], page_url)
             try:
                 send_telegram(token, chat_id, text)
                 log("[{}] 📨 입고 알림 전송 완료".format(name))

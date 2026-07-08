@@ -11,6 +11,10 @@ on:
         description: '테스트 메시지 보내기 (1 입력 시)'
         required: false
         default: ''
+      send_preview:
+        description: '입고 알림 미리보기 보내기 (1 입력 시)'
+        required: false
+        default: ''
 
 concurrency:
   group: stock-check
@@ -41,6 +45,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SEND_TEST: ${{ github.event.inputs.send_test }}
+          SEND_PREVIEW: ${{ github.event.inputs.send_preview }}
         run: python monitor.py
 
       - name: 재고 상태 저장
