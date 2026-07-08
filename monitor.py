@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
@@ -66,6 +67,20 @@ def save_json(path, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def url_read(req, timeout=20, retries=2, backoff=2):
+    """네트워크 순간 오류에 대비해 몇 번 재시도하며 응답 본문(bytes)을 반환."""
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except Exception as e:
+            last = e
+            if attempt < retries:
+                time.sleep(backoff)
+    raise last
+
+
 def won(n):
     try:
         return "{:,}원".format(int(float(n)))
@@ -90,8 +105,7 @@ def fetch_sony_status(p):
         "User-Agent": BROWSER_UA,
     }
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    data = json.loads(url_read(req).decode("utf-8", errors="replace"))
 
     options = data.get("flatOptions") or data.get("multiLevelOptions") or []
     total_stock = 0
@@ -119,8 +133,12 @@ def fetch_fuji_status(p):
     url = p["page_url"]
     headers = {"User-Agent": BROWSER_UA, "Accept-Language": "ko-KR,ko;q=0.9"}
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        html = resp.read().decode("utf-8", errors="replace")
+    html = url_read(req).decode("utf-8", errors="replace")
+
+    # 페이지 구조 검증: 차단/리다이렉트/개편 등으로 상품 페이지가 아니면
+    # 조용히 "품절"로 오인하지 않도록 오류로 처리(다음 실행에서 재시도).
+    if "selected-product__item" not in html and "data-soldout" not in html:
+        raise RuntimeError("상품 페이지 구조를 찾지 못함 (차단 또는 페이지 변경 가능)")
 
     # 각 옵션(색상)은 selected-product__item 블록에 data-soldout="true/false" 로 표시됨
     chunks = html.split('class="selected-product__item"')
@@ -181,8 +199,7 @@ def send_telegram(token, chat_id, text):
         "parse_mode": "HTML",
     }).encode("utf-8")
     req = urllib.request.Request(url, data=payload)
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        result = json.loads(resp.read().decode("utf-8", errors="replace"))
+    result = json.loads(url_read(req).decode("utf-8", errors="replace"))
     if not result.get("ok"):
         raise RuntimeError("텔레그램 전송 실패: {}".format(result))
     return result
@@ -268,15 +285,18 @@ def main():
             name, "✅ 구매가능" if is_available else "⛔ 품절", status["detail"]))
 
         # 품절 -> 입고로 바뀌는 순간에만 알림
+        alert_failed = False
         if is_available and not was_available:
             text = build_alert_text(name, status["alert_lines"], default_url(p))
             try:
                 send_telegram(token, chat_id, text)
                 log("[{}] 📨 입고 알림 전송 완료".format(name))
             except Exception as e:
-                log("[{}] 알림 전송 실패: {}".format(name, e))
+                alert_failed = True
+                log("[{}] 알림 전송 실패(다음 실행에서 재시도): {}".format(name, e))
 
-        state[key] = {"available": is_available}
+        # 알림을 보내야 했는데 실패했다면 상태를 넘기지 않아 다음 실행에서 다시 알림 시도
+        state[key] = {"available": is_available and not alert_failed}
 
     save_json(STATE_PATH, state)
 

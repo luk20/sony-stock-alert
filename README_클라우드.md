@@ -69,16 +69,21 @@ PC를 꺼도 됩니다.
 
 ## 감시 상품 추가/변경
 `products.json` 파일을 저장소에서 직접 수정(연필 아이콘 ✏️)하면 됩니다.
-소니 스토어 주소 `store.sony.co.kr/product-view/**숫자**` 의 그 **숫자**가 `product_no` 입니다.
+사이트마다 넣는 값이 다릅니다:
+
+- **소니 스토어**: `"type": "sony"` + `product_no` (주소 `store.sony.co.kr/product-view/`**숫자**의 그 숫자)
+- **후지필름 스토어**: `"type": "fuji"` + `page_url` (상품 페이지 주소 그대로)
 
 ```json
 {
   "products": [
-    { "name": "RX100M7", "product_no": 102263765, "page_url": "https://store.sony.co.kr/product-view/102263765" },
-    { "name": "다른 소니 제품", "product_no": 100000000, "page_url": "https://store.sony.co.kr/product-view/100000000" }
+    { "name": "RX100M7", "type": "sony", "product_no": 102263765, "page_url": "https://store.sony.co.kr/product-view/102263765" },
+    { "name": "후지필름 X100VI", "type": "fuji", "page_url": "https://www.fujifilm-korea.co.kr/products/id/1330" }
   ]
 }
 ```
+
+> 다른 브랜드 공식몰을 추가하고 싶으면 그 사이트의 재고 확인 방식이 달라서 코드 보완이 필요합니다. 필요하면 요청하세요.
 
 ---
 
