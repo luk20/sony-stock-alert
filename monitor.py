@@ -179,8 +179,8 @@ def fetch_fuji_status(p):
         detail.append("{}: {}".format(nm, "품절" if soldout else ("구매가능 " + price)))
 
     if not detail:
-        # 파싱 실패 시 최후의 판단: data-soldout="false" 존재 여부
-        available = 'data-soldout="false"' in page_html
+        # 파싱 실패 시 최후의 판단: data-soldout=false 존재 여부 (따옴표 스타일 무관)
+        available = re.search(r"data-soldout=[\"']\s*false", page_html) is not None
         detail.append("(옵션 파싱 실패, data-soldout=false 여부로 판단)")
 
     lines = []
