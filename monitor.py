@@ -221,8 +221,22 @@ def main():
         sys.exit(1)
 
     # 미리보기: 실제 입고 알림과 동일한 모양을 1회만 보냄 (상태는 건드리지 않음)
-    if os.environ.get("SEND_PREVIEW", "").strip() == "1":
-        p = products[0]
+    # SEND_PREVIEW 값: "1"=첫 상품, 숫자=해당 순번, 문자=상품명/타입에 포함되는 상품 선택
+    preview_sel = os.environ.get("SEND_PREVIEW", "").strip()
+    if preview_sel:
+        p = None
+        if preview_sel.isdigit():
+            idx = int(preview_sel) - 1
+            if 0 <= idx < len(products):
+                p = products[idx]
+        if p is None:
+            for pp in products:
+                hay = (str(pp.get("name", "")) + " " + str(pp.get("type", ""))).lower()
+                if preview_sel.lower() in hay:
+                    p = pp
+                    break
+        if p is None:
+            p = products[0]
         name = p.get("name", product_key(p))
         try:
             status = fetch_status(p)
