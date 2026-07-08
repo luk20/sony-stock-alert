@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 코드 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 타임스탬프 갱신 커밋
         run: |
@@ -25,3 +25,14 @@ jobs:
           git add .github/keepalive.txt
           git commit -m "chore: 저장소 활동 유지 (자동)" || echo "변경 없음"
           git push
+
+      # keepalive 가 조용히 죽으면 60일 뒤 감시 전체가 멈추므로, 실패는 반드시 폰으로 알린다
+      - name: 실패 시 텔레그램 통보
+        if: failure()
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=⚠️ [입고 알리미] 저장소 유지(keepalive) 작업이 실패했습니다. GitHub Actions 로그를 확인하세요. 방치하면 60일 후 자동 감시가 멈춥니다." > /dev/null

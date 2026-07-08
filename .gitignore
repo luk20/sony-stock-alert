@@ -3,5 +3,6 @@ config.json
 
 # 자동 생성/임시 파일
 state.json
+state_local.json
 __pycache__/
 *.pyc

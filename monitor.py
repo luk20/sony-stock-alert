@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
@@ -37,6 +38,11 @@ STATE_PATH = os.path.join(BASE_DIR, "state.json")
 # 소니 스토어(shopby) 공개 API 정보 — bundle.js 에서 확인된 값
 SHOP_API = "https://shop-api.e-ncp.com"
 SHOP_CLIENT_ID = "jkEJfXWkjf3NDwFlgc37xQ=="
+
+# shopby 판매상태 중 "구매 불가"로 알려진 값들.
+# 판매중지/종료/대기 상태를 입고로 오인해 거짓 알림을 보내지 않기 위한 목록.
+# (모르는 새 상태는 놓침 방지를 위해 일단 구매가능으로 취급)
+NOT_PURCHASABLE_SALE_TYPES = {"SOLDOUT", "STOP", "FINISH", "FINISHED", "READY", "PROHIBITION"}
 
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 
@@ -119,7 +125,7 @@ def fetch_sony_status(p):
         forced_soldout = bool(opt.get("forcedSoldOut", False))
         label = opt.get("value") or opt.get("label") or ""
         total_stock += max(stock, 0)
-        if (sale_type != "SOLDOUT") and (not forced_soldout):
+        if (sale_type not in NOT_PURCHASABLE_SALE_TYPES) and (not forced_soldout):
             available = True
         detail.append("{}: {} (재고 {})".format(label, sale_type or "?", stock))
 
@@ -142,15 +148,19 @@ def fetch_fuji_status(p):
     if "selected-product__item" not in page_html and "data-soldout" not in page_html:
         raise RuntimeError("상품 페이지 구조를 찾지 못함 (차단 또는 페이지 변경 가능)")
 
-    # 각 옵션(색상)은 selected-product__item 블록에 data-soldout="true/false" 로 표시됨
-    chunks = page_html.split('class="selected-product__item"')
+    # 각 옵션(색상)은 selected-product__item 블록에 data-soldout="true/false" 로 표시됨.
+    # data-soldout 은 반드시 "같은 여는 태그 안"에서만 찾는다 — 속성 순서가 바뀌어도
+    # 옆 옵션의 값을 잘못 읽는 일이 없도록.
+    item_tags = list(re.finditer(r'<[^>]*class="selected-product__item"[^>]*>', page_html))
     available = False
     detail = []
     avail = []
-    for chunk in chunks[1:]:
-        sm = re.search(r'data-soldout="([^"]*)"', chunk)
-        nmm = re.search(r'selected-product__name">([^<]*)<', chunk)
-        prm = re.search(r'selected-product__price">([^<]*)<', chunk)
+    for i, m in enumerate(item_tags):
+        sm = re.search(r'data-soldout="([^"]*)"', m.group(0))
+        seg_end = item_tags[i + 1].start() if i + 1 < len(item_tags) else len(page_html)
+        seg = page_html[m.end():seg_end]
+        nmm = re.search(r'selected-product__name">([^<]*)<', seg)
+        prm = re.search(r'selected-product__price">([^<]*)<', seg)
         if not (sm and nmm):
             continue
         soldout = sm.group(1).strip().lower() == "true"
@@ -190,6 +200,18 @@ def product_key(p):
     return str(p.get("product_no") or p.get("page_url") or p.get("name"))
 
 
+def select_preview_product(sel, products):
+    """SEND_PREVIEW 값으로 상품 선택: 순번(1부터) 또는 상품명/타입 부분 문자열. 못 찾으면 None."""
+    if sel.isdigit():
+        idx = int(sel) - 1
+        return products[idx] if 0 <= idx < len(products) else None
+    for pp in products:
+        hay = (str(pp.get("name", "")) + " " + str(pp.get("type", ""))).lower()
+        if sel.lower() in hay:
+            return pp
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 텔레그램 / 메시지
 # ---------------------------------------------------------------------------
@@ -202,7 +224,24 @@ def send_telegram(token, chat_id, text):
         "parse_mode": "HTML",
     }).encode("utf-8")
     req = urllib.request.Request(url, data=payload)
-    result = json.loads(url_read(req).decode("utf-8", errors="replace"))
+    # 전송 재시도 정책:
+    #  - HTTPError(4xx/5xx): 서버가 요청을 받은 것이므로 재시도하면 중복 발송 위험 → 즉시 실패
+    #  - 연결 오류(타임아웃 등): 요청이 도달하지 못했을 가능성이 높아 1회만 재시도
+    #  전송이 최종 실패해도 main() 이 상태를 넘기지 않아 다음 실행에서 다시 알림을 시도한다.
+    last = None
+    for attempt in range(2):
+        try:
+            raw = url_read(req, retries=0)
+            break
+        except urllib.error.HTTPError:
+            raise
+        except Exception as e:
+            last = e
+            if attempt == 0:
+                time.sleep(2)
+    else:
+        raise last
+    result = json.loads(raw.decode("utf-8", errors="replace"))
     if not result.get("ok"):
         raise RuntimeError("텔레그램 전송 실패: {}".format(result))
     return result
@@ -244,19 +283,12 @@ def main():
     # SEND_PREVIEW 값: "1"=첫 상품, 숫자=해당 순번, 문자=상품명/타입에 포함되는 상품 선택
     preview_sel = os.environ.get("SEND_PREVIEW", "").strip()
     if preview_sel:
-        p = None
-        if preview_sel.isdigit():
-            idx = int(preview_sel) - 1
-            if 0 <= idx < len(products):
-                p = products[idx]
+        p = select_preview_product(preview_sel, products)
         if p is None:
-            for pp in products:
-                hay = (str(pp.get("name", "")) + " " + str(pp.get("type", ""))).lower()
-                if preview_sel.lower() in hay:
-                    p = pp
-                    break
-        if p is None:
-            p = products[0]
+            log("SEND_PREVIEW='{}' 에 해당하는 상품이 없습니다. 사용 가능: {}".format(
+                preview_sel,
+                ", ".join("{}={}".format(i + 1, pp.get("name")) for i, pp in enumerate(products))))
+            sys.exit(1)
         name = p.get("name", product_key(p))
         try:
             status = fetch_status(p)
