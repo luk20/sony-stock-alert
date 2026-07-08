@@ -14,6 +14,7 @@
   2) python sony_stock_alert.py   (또는 실행.bat 더블클릭)
 """
 
+import json
 import os
 import sys
 import time
@@ -30,9 +31,14 @@ log = monitor.log
 
 
 def load_config():
-    cfg = monitor.load_json(CONFIG_PATH, None)
-    if cfg is None:
-        log("config.json 파일이 없습니다. README.md 를 참고해 설정하세요.")
+    if not os.path.exists(CONFIG_PATH):
+        log("config.json 파일이 없습니다. README.md 를 참고해 만들어 주세요.")
+        sys.exit(1)
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        log("config.json 을 읽지 못했습니다 (JSON 문법 오류일 수 있음): {}".format(e))
         sys.exit(1)
     token = str(cfg.get("telegram_bot_token", "")).strip()
     chat_id = str(cfg.get("telegram_chat_id", "")).strip()

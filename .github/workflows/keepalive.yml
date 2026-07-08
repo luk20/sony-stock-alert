@@ -33,6 +33,7 @@ jobs:
           TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+          # 통보 결과를 로그에 남겨 통보 자체의 실패(토큰 만료 등)도 확인 가능하게 한다
+          curl -s -w '\ntelegram_http_status:%{http_code}\n' -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${CHAT_ID}" \
-            --data-urlencode "text=⚠️ [입고 알리미] 저장소 유지(keepalive) 작업이 실패했습니다. GitHub Actions 로그를 확인하세요. 방치하면 60일 후 자동 감시가 멈춥니다." > /dev/null
+            --data-urlencode "text=⚠️ [입고 알리미] 저장소 유지(keepalive) 작업이 실패했습니다. GitHub Actions 로그를 확인하세요. 방치하면 60일 후 자동 감시가 멈춥니다."

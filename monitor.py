@@ -125,7 +125,12 @@ def fetch_sony_status(p):
         forced_soldout = bool(opt.get("forcedSoldOut", False))
         label = opt.get("value") or opt.get("label") or ""
         total_stock += max(stock, 0)
-        if (sale_type not in NOT_PURCHASABLE_SALE_TYPES) and (not forced_soldout):
+        purchasable = (sale_type not in NOT_PURCHASABLE_SALE_TYPES) and (not forced_soldout)
+        # 안전망: 상태어 해석이 틀리더라도 실제 재고가 잡혀 있으면 구매가능으로 본다 (놓침 방지).
+        # 단 서버가 명시적으로 SOLDOUT/강제품절이라고 하면 그 판단을 따른다.
+        if (stock > 0) and (sale_type != "SOLDOUT") and (not forced_soldout):
+            purchasable = True
+        if purchasable:
             available = True
         detail.append("{}: {} (재고 {})".format(label, sale_type or "?", stock))
 
@@ -151,7 +156,8 @@ def fetch_fuji_status(p):
     # 각 옵션(색상)은 selected-product__item 블록에 data-soldout="true/false" 로 표시됨.
     # data-soldout 은 반드시 "같은 여는 태그 안"에서만 찾는다 — 속성 순서가 바뀌어도
     # 옆 옵션의 값을 잘못 읽는 일이 없도록.
-    item_tags = list(re.finditer(r'<[^>]*class="selected-product__item"[^>]*>', page_html))
+    # class 값에 다른 클래스가 앞뒤로 추가돼도 매칭되도록 (단 selected-product__items 같은 유사어는 제외)
+    item_tags = list(re.finditer(r'<[^>]*class="(?:[^"]* )?selected-product__item[" ][^>]*>', page_html))
     available = False
     detail = []
     avail = []
