@@ -1,9 +1,17 @@
 name: 입고 감시 (소니/후지)
 
+# 감시 주기 설계 (KST = UTC+9):
+#  - 평일 09:00~16:00 KST (UTC 월~금 00~06시대): 1분 간격
+#    → 20분마다 "25분짜리 루프 실행"(안에서 60초 간격 확인)을 예약.
+#      concurrency 대기열로 앞 실행이 끝나면 다음이 바로 이어받아 공백 없이 연결됨.
+#  - 그 외 시간(평일 저녁/밤/새벽 + 주말): 5분 간격 단발 확인.
 on:
   schedule:
-    # 5분마다 실행 (GitHub Actions 최소 간격). UTC 기준이지만 주기 실행이라 무관.
-    - cron: '*/5 * * * *'
+    # [1분 모드] 평일 09:00~16:00 KST 루프 이어달리기 (마지막 루프는 ~16:05 KST 에 종료)
+    - cron: '*/20 0-6 * * 1-5'
+    # [5분 모드] 평일 16시~다음날 09시 KST + 주말 낮 (UTC 7~23시대는 모든 요일)
+    - cron: '*/5 7-23 * * *'
+    - cron: '*/5 0-6 * * 0,6'
   # Actions 탭에서 수동 실행도 가능 (테스트용)
   workflow_dispatch:
     inputs:
@@ -13,6 +21,10 @@ on:
         default: ''
       send_preview:
         description: '입고 알림 미리보기 (1=소니, 2=후지, 또는 상품명 일부)'
+        required: false
+        default: ''
+      loop_minutes:
+        description: '루프 테스트: 지정한 분 동안 1분 간격 반복 (비우면 1회만)'
         required: false
         default: ''
 
@@ -27,6 +39,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # 루프(25분)가 어떤 이유로든 멈추지 않고 매달리는 것 방지
+    timeout-minutes: 30
     steps:
       - name: 코드 체크아웃
         uses: actions/checkout@v5
@@ -50,6 +64,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SEND_TEST: ${{ github.event.inputs.send_test }}
           SEND_PREVIEW: ${{ github.event.inputs.send_preview }}
+          # 평일 낮 루프 예약이면 25분 루프, 5분 예약이면 단발(0), 수동 실행은 입력값 사용
+          LOOP_MINUTES: ${{ github.event_name == 'schedule' && (github.event.schedule == '*/20 0-6 * * 1-5' && '25' || '0') || (github.event.inputs.loop_minutes || '0') }}
         run: python monitor.py
 
       - name: 재고 상태 저장

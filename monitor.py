@@ -18,6 +18,8 @@
   SEND_TEST=1         (선택) 연결 확인용 테스트 메시지 1건만 보내고 종료
   SEND_PREVIEW=값     (선택) 입고 알림 미리보기 1건만 보내고 종료
                       값: 숫자(상품 순번, 1부터) 또는 상품명/타입 일부 문자열
+  LOOP_MINUTES=분     (선택) 지정한 분 동안 60초 간격으로 반복 확인 후 종료
+                      (0 또는 미설정이면 1회 확인만) — 평일 영업시간 1분 감시용
 """
 
 import html
@@ -310,6 +312,28 @@ def main():
 
     state = load_json(STATE_PATH, {})
 
+    # 루프 모드: LOOP_MINUTES 분 동안 60초 간격으로 반복 확인 (0 이면 1회만)
+    # 평일 영업시간에 20분 간격으로 예약된 25분짜리 루프들이 이어달리기하며 1분 간격을 만든다.
+    loop_minutes = int(os.environ.get("LOOP_MINUTES", "0").strip() or 0)
+    started = time.time()
+    pass_no = 0
+    while True:
+        pass_no += 1
+        if loop_minutes > 0:
+            log("--- 확인 {}회차 ---".format(pass_no))
+        try:
+            run_pass(token, chat_id, products, state)
+        except Exception as e:
+            log("확인 회차 오류(다음 회차에서 계속): {}".format(e))
+        # 다음 회차를 돌 시간 여유(60초 대기 + 확인 몇 초)가 없으면 종료해
+        # 대기 중인 다음 루프 실행에게 자리를 넘긴다.
+        if loop_minutes <= 0 or (time.time() - started) >= loop_minutes * 60 - 70:
+            break
+        time.sleep(60)
+
+
+def run_pass(token, chat_id, products, state):
+    """모든 상품을 1회 확인하고 필요 시 알림 전송, 상태 저장."""
     for p in products:
         name = p.get("name", product_key(p))
         key = product_key(p)
